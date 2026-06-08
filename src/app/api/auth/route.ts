@@ -1,14 +1,16 @@
 import { NextResponse } from 'next/server';
 
-const DEFAULT_EMAIL = 'admin@soteria.in';
-const DEFAULT_PASSWORD = 'SoteriaAdmin2026!';
-
 export async function POST(request: Request) {
   try {
     const { email, password } = await request.json();
 
-    const expectedEmail = process.env.DASHBOARD_EMAIL || DEFAULT_EMAIL;
-    const expectedPassword = process.env.DASHBOARD_PASSWORD || DEFAULT_PASSWORD;
+    const expectedEmail = process.env.DASHBOARD_EMAIL;
+    const expectedPassword = process.env.DASHBOARD_PASSWORD;
+
+    if (!expectedEmail || !expectedPassword) {
+      console.error('ERROR: DASHBOARD_EMAIL and DASHBOARD_PASSWORD must be configured as environment variables.');
+      return NextResponse.json({ error: 'Server authentication misconfigured' }, { status: 500 });
+    }
 
     if (email === expectedEmail && password === expectedPassword) {
       // Create a response that sets a mock token in a cookie

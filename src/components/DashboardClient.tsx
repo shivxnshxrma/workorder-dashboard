@@ -45,12 +45,12 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
   
   // App Configs
   const [uploadApiUrl, setUploadApiUrl] = useState('https://api-mneo-cbre.merlin-soteria.in/api/v1/');
-  const [uploadUsername, setUploadUsername] = useState('shivansh@soteria.in');
-  const [uploadPassword, setUploadPassword] = useState('Merlin@123');
+  const [uploadUsername, setUploadUsername] = useState('');
+  const [uploadPassword, setUploadPassword] = useState('');
   
   const [deleteApiUrl, setDeleteApiUrl] = useState('https://api-merlin.tenonfm-india.com/api/v1/');
-  const [deleteUsername, setDeleteUsername] = useState('shivansh@soteria.in');
-  const [deletePassword, setDeletePassword] = useState('Merlin@123');
+  const [deleteUsername, setDeleteUsername] = useState('');
+  const [deletePassword, setDeletePassword] = useState('');
   
   // Upload State
   const [uploadFile, setUploadFile] = useState<File | null>(null);
