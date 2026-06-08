@@ -1,65 +1,154 @@
-import Image from "next/image";
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import { Mail, Lock, LogIn, AlertCircle, Database } from 'lucide-react';
+import DashboardClient from '@/components/DashboardClient';
+import './login.css';
+import './dashboard.css';
 
 export default function Home() {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [userEmail, setUserEmail] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  // Check login status on load
+  useEffect(() => {
+    const checkSession = () => {
+      const cookies = document.cookie.split(';');
+      const sessionCookie = cookies.find((c) => c.trim().startsWith('dashboard_session='));
+      const savedEmail = localStorage.getItem('soteria_user_email');
+      
+      if (sessionCookie && savedEmail) {
+        setIsAuthenticated(true);
+        setUserEmail(savedEmail);
+      } else {
+        setIsAuthenticated(false);
+      }
+    };
+    checkSession();
+  }, []);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password) {
+      setError('Please fill in all fields.');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const response = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        localStorage.setItem('soteria_user_email', data.user.email);
+        setUserEmail(data.user.email);
+        setIsAuthenticated(true);
+      } else {
+        setError(data.error || 'Invalid credentials. Please try again.');
+      }
+    } catch (err) {
+      setError('A connection error occurred. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    // Delete session cookie
+    document.cookie = 'dashboard_session=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT;';
+    localStorage.removeItem('soteria_user_email');
+    setIsAuthenticated(false);
+    setEmail('');
+    setPassword('');
+  };
+
+  // Prevent flash before checking authentication
+  if (isAuthenticated === null) {
+    return (
+      <div style={{ display: 'flex', minHeight: '100vh', alignItems: 'center', justifyContent: 'center', backgroundColor: '#0a0c10', color: '#f8fafc' }}>
+        <div className="loading-spinner"></div>
+      </div>
+    );
+  }
+
+  if (isAuthenticated) {
+    return <DashboardClient userEmail={userEmail} onLogout={handleLogout} />;
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="login-container animated-fade-in">
+      <div className="login-glass-card glow-effect">
+        <div className="login-header">
+          <div className="login-logo">
+            <Database size={24} />
+          </div>
+          <h2 className="login-title">Soteria Control Center</h2>
+          <p className="login-subtitle">Sign in to manage bulk work orders</p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+
+        <form className="login-form" onSubmit={handleLogin}>
+          <div className="input-group">
+            <label className="input-label" htmlFor="email-input">EMAIL ADDRESS</label>
+            <div className="input-field-wrapper">
+              <Mail className="input-icon" size={16} />
+              <input
+                id="email-input"
+                type="email"
+                className="input-field transition-all"
+                placeholder="admin@soteria.in"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={loading}
+              />
+            </div>
+          </div>
+
+          <div className="input-group">
+            <label className="input-label" htmlFor="password-input">PASSWORD</label>
+            <div className="input-field-wrapper">
+              <Lock className="input-icon" size={16} />
+              <input
+                id="password-input"
+                type="password"
+                className="input-field transition-all"
+                placeholder="••••••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                disabled={loading}
+              />
+            </div>
+          </div>
+
+          {error && (
+            <div className="auth-error">
+              <AlertCircle size={16} style={{ flexShrink: 0 }} />
+              <span>{error}</span>
+            </div>
+          )}
+
+          <button className="login-btn transition-all" type="submit" disabled={loading}>
+            {loading ? (
+              <span className="loading-spinner"></span>
+            ) : (
+              <>
+                <LogIn size={18} />
+                <span>Access Dashboard</span>
+              </>
+            )}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }
