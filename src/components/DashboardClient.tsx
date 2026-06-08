@@ -556,6 +556,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
                         value={uploadApiUrl}
                         onChange={(e) => setUploadApiUrl(e.target.value)}
                         disabled={isRunning}
+                        readOnly
                       />
                     </div>
                   </div>
@@ -695,6 +696,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
                         onChange={(e) => setDeleteLimit(parseInt(e.target.value) || 0)}
                         disabled={isRunning}
                         min={1}
+                        max={3300}
                       />
                     </div>
                   </div>
