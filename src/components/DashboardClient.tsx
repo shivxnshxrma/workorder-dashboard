@@ -41,6 +41,8 @@ interface LogLine {
   text: string;
 }
 
+const MAX_DELETE_WORKERS = 10;
+
 export default function DashboardClient({ userEmail, onLogout }: { userEmail: string; onLogout: () => void }) {
   const [activeTab, setActiveTab] = useState<'upload' | 'delete' | 'logs'>('upload');
   
@@ -357,6 +359,49 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
     let failedCount = 0;
     let attemptedCount = 0;
 
+    const deleteWorkOrdersConcurrently = async (workOrders: any[], initialFailedCount: number = 0) => {
+      let nextIndex = 0;
+      let completedCount = 0;
+      let deleteSuccessCount = 0;
+      let deleteFailedCount = 0;
+      const workerCount = Math.min(MAX_DELETE_WORKERS, workOrders.length);
+
+      if (workOrders.length === 0) {
+        return { success: 0, failed: 0 };
+      }
+
+      addLog(`Deleting with up to ${workerCount} concurrent requests...`, 'info');
+      setStats({ total: workOrders.length, current: 0, success: 0, failed: initialFailedCount });
+      setProgress(0);
+
+      const worker = async () => {
+        while (nextIndex < workOrders.length) {
+          const currentIndex = nextIndex;
+          nextIndex++;
+
+          const success = await client.deleteWorkOrder(workOrders[currentIndex], dryRun);
+          completedCount++;
+
+          if (success) {
+            deleteSuccessCount++;
+          } else {
+            deleteFailedCount++;
+          }
+
+          setStats({
+            total: workOrders.length,
+            current: completedCount,
+            success: deleteSuccessCount,
+            failed: initialFailedCount + deleteFailedCount,
+          });
+          setProgress(Math.round((completedCount / workOrders.length) * 100));
+        }
+      };
+
+      await Promise.all(Array.from({ length: workerCount }, () => worker()));
+      return { success: deleteSuccessCount, failed: deleteFailedCount };
+    };
+
     if (deleteMode === 'client_all') {
       const clientName = deleteClientName.trim();
       let clientId = deleteClientId.trim();
@@ -393,26 +438,10 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       }
 
       addLog(`Found ${workOrders.length} work orders to delete. Starting loop...`, 'info');
-      setStats({ total: workOrders.length, current: 0, success: 0, failed: 0 });
-
-      for (let i = 0; i < workOrders.length; i++) {
-        attemptedCount++;
-        const wo = workOrders[i];
-        const success = await client.deleteWorkOrder(wo, dryRun);
-        if (success) {
-          successCount++;
-        } else {
-          failedCount++;
-        }
-
-        setStats({
-          total: workOrders.length,
-          current: i + 1,
-          success: successCount,
-          failed: failedCount,
-        });
-        setProgress(Math.round(((i + 1) / workOrders.length) * 100));
-      }
+      attemptedCount = workOrders.length;
+      const result = await deleteWorkOrdersConcurrently(workOrders);
+      successCount = result.success;
+      failedCount = result.failed;
     } else {
       // deleteMode === 'sheet'
       if (deleteRows.length === 0) {
@@ -424,6 +453,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       const totalToDelete = Math.min(deleteLimit, deleteRows.length);
       addLog(`Processing up to ${totalToDelete} deletions from sheet...`, 'info');
       setStats({ total: totalToDelete, current: 0, success: 0, failed: 0 });
+      const workOrdersToDelete: any[] = [];
 
       for (let i = 0; i < totalToDelete; i++) {
         const row = deleteRows[i];
@@ -445,7 +475,6 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
           continue;
         }
 
-        attemptedCount++;
         addLog(`Searching work order ${woNum} for client ${clientId}...`, 'general');
         const workOrder = await client.findWorkOrderByNumber(clientId, woNum);
 
@@ -472,20 +501,25 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
           continue;
         }
 
-        const success = await client.deleteWorkOrder(workOrder, dryRun);
-        if (success) {
-          successCount++;
-        } else {
-          failedCount++;
-        }
+        workOrdersToDelete.push(workOrder);
 
         setStats({
           total: totalToDelete,
-          current: attemptedCount,
+          current: i + 1,
           success: successCount,
           failed: failedCount,
         });
-        setProgress(Math.round((attemptedCount / totalToDelete) * 100));
+        setProgress(Math.round(((i + 1) / totalToDelete) * 100));
+      }
+
+      attemptedCount = totalToDelete;
+
+      if (workOrdersToDelete.length === 0) {
+        addLog('No matched work orders passed validation for deletion.', 'warning');
+      } else {
+        const result = await deleteWorkOrdersConcurrently(workOrdersToDelete, failedCount);
+        successCount = result.success;
+        failedCount += result.failed;
       }
     }
 
