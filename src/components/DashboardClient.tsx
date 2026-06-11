@@ -76,6 +76,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
   
   // Process State
   const [isRunning, setIsRunning] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [progress, setProgress] = useState(0);
   const [stats, setStats] = useState({ total: 0, current: 0, success: 0, failed: 0 });
   const [logs, setLogs] = useState<LogLine[]>([]);
@@ -85,6 +86,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
   const [searchQuery, setSearchQuery] = useState('');
   
   const consoleEndRef = useRef<HTMLDivElement>(null);
+  const stopRequestedRef = useRef(false);
 
   // Load audit logs from localStorage on mount
   useEffect(() => {
@@ -98,12 +100,12 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
     }
   }, []);
 
-  // Auto-scroll console
+  // Keep console stable during deletes so the user can inspect earlier lines.
   useEffect(() => {
-    if (consoleEndRef.current) {
+    if (activeTab !== 'delete' && consoleEndRef.current) {
       consoleEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [logs]);
+  }, [activeTab, logs]);
 
   const addLog = (text: string, type: LogLine['type'] = 'general') => {
     const timestamp = new Date().toLocaleTimeString();
@@ -112,6 +114,12 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
 
   const clearConsole = () => {
     setLogs([]);
+  };
+
+  const requestStop = () => {
+    stopRequestedRef.current = true;
+    setIsStopping(true);
+    addLog('Stop requested. Current in-flight request(s) will finish; no new work will start.', 'warning');
   };
 
   const resetDeleteLocations = () => {
@@ -232,6 +240,8 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       return;
     }
 
+    stopRequestedRef.current = false;
+    setIsStopping(false);
     setIsRunning(true);
     setProgress(0);
     setStats({ total: uploadRows.length, current: 0, success: 0, failed: 0 });
@@ -267,6 +277,14 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
     if (!authenticated) {
       addLog('Authentication failed. Terminating upload.', 'danger');
       setIsRunning(false);
+      setIsStopping(false);
+      return;
+    }
+
+    if (stopRequestedRef.current) {
+      addLog('Upload stopped before cache preload.', 'warning');
+      setIsRunning(false);
+      setIsStopping(false);
       return;
     }
 
@@ -275,6 +293,10 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
     // Group client caching
     const uniqueClients = Array.from(new Set(uploadRows.map((r: any) => String(r.Client || '').trim()).filter(Boolean)));
     for (const clientName of uniqueClients) {
+      if (stopRequestedRef.current) {
+        addLog('Upload stopped during client cache preload.', 'warning');
+        break;
+      }
       const clientId = await client.getClientIdByName(clientName);
       if (clientId) {
         await client.preloadCacheForClient(clientId, clientName);
@@ -285,6 +307,11 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
     let failedCount = 0;
 
     for (let i = 0; i < uploadRows.length; i++) {
+      if (stopRequestedRef.current) {
+        addLog(`Upload stopped. ${uploadRows.length - i} row(s) left unprocessed.`, 'warning');
+        break;
+      }
+
       const row = uploadRows[i];
       addLog(`Processing row ${i + 1}/${uploadRows.length}: "${row.Title || 'Untitled Work Order'}"...`, 'general');
       
@@ -310,16 +337,21 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       setProgress(Math.round((current / uploadRows.length) * 100));
     }
 
-    addLog('\n--- Upload Process Completed ---', 'info');
+    const uploadStopped = stopRequestedRef.current;
+    addLog(`\n--- Upload Process ${uploadStopped ? 'Stopped' : 'Completed'} ---`, uploadStopped ? 'warning' : 'info');
     addLog(`Total Processed: ${uploadRows.length}`, 'general');
     addLog(`Successfully Created: ${successCount}`, 'success');
     addLog(`Failed: ${failedCount}`, 'danger');
 
     saveAuditLog('upload', uploadFile?.name || 'Excel/CSV file', uploadRows.length, successCount, failedCount);
+    stopRequestedRef.current = false;
     setIsRunning(false);
+    setIsStopping(false);
   };
 
   const startBulkDelete = async () => {
+    stopRequestedRef.current = false;
+    setIsStopping(false);
     setIsRunning(true);
     setProgress(0);
     clearConsole();
@@ -352,6 +384,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
     if (!authenticated) {
       addLog('Authentication failed. Terminating delete.', 'danger');
       setIsRunning(false);
+      setIsStopping(false);
       return;
     }
 
@@ -375,7 +408,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       setProgress(0);
 
       const worker = async () => {
-        while (nextIndex < workOrders.length) {
+        while (!stopRequestedRef.current && nextIndex < workOrders.length) {
           const currentIndex = nextIndex;
           nextIndex++;
 
@@ -399,6 +432,9 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       };
 
       await Promise.all(Array.from({ length: workerCount }, () => worker()));
+      if (stopRequestedRef.current && completedCount < workOrders.length) {
+        addLog(`Delete stopped. ${workOrders.length - completedCount} queued work order(s) were not deleted.`, 'warning');
+      }
       return { success: deleteSuccessCount, failed: deleteFailedCount };
     };
 
@@ -417,6 +453,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       if (!clientId) {
         addLog('Client ID or valid Client Name is required.', 'danger');
         setIsRunning(false);
+        setIsStopping(false);
         return;
       }
 
@@ -424,6 +461,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       if (locationId && locationsClientId !== clientId) {
         addLog('Selected site locations are for a different Client ID. Load locations again.', 'danger');
         setIsRunning(false);
+        setIsStopping(false);
         return;
       }
 
@@ -434,6 +472,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       if (workOrders.length === 0) {
         addLog('No work orders found matching criteria.', 'warning');
         setIsRunning(false);
+        setIsStopping(false);
         return;
       }
 
@@ -447,6 +486,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       if (deleteRows.length === 0) {
         addLog('No rows to process. Please upload a delete Excel/CSV file first.', 'warning');
         setIsRunning(false);
+        setIsStopping(false);
         return;
       }
 
@@ -456,6 +496,11 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       const workOrdersToDelete: any[] = [];
 
       for (let i = 0; i < totalToDelete; i++) {
+        if (stopRequestedRef.current) {
+          addLog(`Delete stopped during sheet lookup. ${totalToDelete - i} row(s) left unchecked.`, 'warning');
+          break;
+        }
+
         const row = deleteRows[i];
         
         // Accepted column mapping (case-insensitive)
@@ -523,7 +568,8 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       }
     }
 
-    addLog('\n--- Delete Process Completed ---', 'info');
+    const deleteStopped = stopRequestedRef.current;
+    addLog(`\n--- Delete Process ${deleteStopped ? 'Stopped' : 'Completed'} ---`, deleteStopped ? 'warning' : 'info');
     addLog(`Total Attempted: ${attemptedCount}`, 'general');
     addLog(`${dryRun ? 'Simulated' : 'Actual'} Deletions: ${successCount}`, 'success');
     addLog(`Failed/Skipped: ${failedCount}`, 'danger');
@@ -535,7 +581,9 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       successCount,
       failedCount
     );
+    stopRequestedRef.current = false;
     setIsRunning(false);
+    setIsStopping(false);
   };
 
   const filteredLogs = auditLogs.filter(
@@ -713,14 +761,26 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
                     />
                   </div>
 
-                  <button
-                    className="action-btn transition-all"
-                    onClick={startBulkUpload}
-                    disabled={isRunning || uploadRows.length === 0}
-                  >
-                    <Play size={16} />
-                    <span>Start Bulk Upload</span>
-                  </button>
+                  <div className="action-row">
+                    <button
+                      className="action-btn transition-all"
+                      onClick={startBulkUpload}
+                      disabled={isRunning || uploadRows.length === 0}
+                    >
+                      <Play size={16} />
+                      <span>Start Bulk Upload</span>
+                    </button>
+                    {isRunning && (
+                      <button
+                        className="action-btn stop-btn transition-all"
+                        onClick={requestStop}
+                        disabled={isStopping}
+                      >
+                        <X size={16} />
+                        <span>{isStopping ? 'Stopping' : 'Stop'}</span>
+                      </button>
+                    )}
+                  </div>
                 </>
               ) : (
                 <>
@@ -950,14 +1010,26 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
                     )}
                   </div>
 
-                  <button
-                    className="action-btn danger-btn transition-all"
-                    onClick={startBulkDelete}
-                    disabled={isRunning || isLoadingLocations || (deleteMode === 'sheet' && deleteRows.length === 0)}
-                  >
-                    <Trash2 size={16} />
-                    <span>{dryRun ? 'Simulate Deletes' : 'Perform Bulk Delete'}</span>
-                  </button>
+                  <div className="action-row">
+                    <button
+                      className="action-btn danger-btn transition-all"
+                      onClick={startBulkDelete}
+                      disabled={isRunning || isLoadingLocations || (deleteMode === 'sheet' && deleteRows.length === 0)}
+                    >
+                      <Trash2 size={16} />
+                      <span>{dryRun ? 'Simulate Deletes' : 'Perform Bulk Delete'}</span>
+                    </button>
+                    {isRunning && (
+                      <button
+                        className="action-btn stop-btn transition-all"
+                        onClick={requestStop}
+                        disabled={isStopping}
+                      >
+                        <X size={16} />
+                        <span>{isStopping ? 'Stopping' : 'Stop'}</span>
+                      </button>
+                    )}
+                  </div>
                 </>
               )}
             </div>
