@@ -4,6 +4,12 @@ export interface MerlinConfig {
   password: string;
 }
 
+export interface SiteLocation {
+  id: string;
+  name: string;
+  code?: string;
+}
+
 export class MerlinClient {
   private apiUrl: string;
   private username: string;
@@ -543,23 +549,76 @@ export class MerlinClient {
     return null;
   }
 
-  public async fetchWorkOrders(clientId: string, limit: number, onlyOverdue: boolean): Promise<any[]> {
-    const pageSize = Math.min(100, limit);
-    const params: Record<string, any> = {
-      client: clientId,
-      page: 1,
-      page_size: pageSize,
-    };
-    if (onlyOverdue) {
-      params.is_overdue = 'true';
+  public async fetchLocationsForClient(clientId: string): Promise<SiteLocation[]> {
+    const locations: SiteLocation[] = [];
+    const seen = new Set<string>();
+    const pageSize = 100;
+
+    for (let page = 1; page <= 100; page++) {
+      const res = await this.requestJson('GET', 'locations/', null, {
+        client: clientId,
+        page,
+        page_size: pageSize,
+      });
+
+      if (res.status !== 200) {
+        this.log(`Failed to fetch locations. Status: ${res.status}`);
+        return locations;
+      }
+
+      const items = res.data?.data?.items || [];
+      for (const item of items) {
+        if (item.id && !seen.has(item.id)) {
+          seen.add(item.id);
+          locations.push({
+            id: item.id,
+            name: item.name || item.code || item.id,
+            code: item.code,
+          });
+        }
+      }
+
+      if (items.length < pageSize) {
+        break;
+      }
     }
 
-    const res = await this.requestJson('GET', 'work-orders/', null, params);
-    if (res.status === 200) {
-      return res.data?.data?.items || [];
+    this.log(`Loaded ${locations.length} site locations for client ${clientId}.`);
+    return locations;
+  }
+
+  public async fetchWorkOrders(clientId: string, limit: number, onlyOverdue: boolean, locationId?: string): Promise<any[]> {
+    const workOrders: any[] = [];
+    const pageSize = Math.min(100, Math.max(1, limit));
+
+    for (let page = 1; workOrders.length < limit; page++) {
+      const params: Record<string, any> = {
+        client: clientId,
+        page,
+        page_size: Math.min(pageSize, limit - workOrders.length),
+      };
+      if (onlyOverdue) {
+        params.is_overdue = 'true';
+      }
+      if (locationId) {
+        params.location = locationId;
+      }
+
+      const res = await this.requestJson('GET', 'work-orders/', null, params);
+      if (res.status !== 200) {
+        this.log(`Failed to fetch work orders. Status: ${res.status}`);
+        return workOrders;
+      }
+
+      const items = res.data?.data?.items || [];
+      workOrders.push(...items);
+
+      if (items.length < params.page_size) {
+        break;
+      }
     }
-    this.log(`Failed to fetch work orders. Status: ${res.status}`);
-    return [];
+
+    return workOrders;
   }
 
   public async findWorkOrderByNumber(clientId: string, workOrderNumber: string): Promise<any | null> {

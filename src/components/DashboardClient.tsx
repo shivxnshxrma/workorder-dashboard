@@ -20,9 +20,10 @@ import {
   Moon,
   Info,
   Clock,
-  ShieldAlert
+  ShieldAlert,
+  MapPin
 } from 'lucide-react';
-import { MerlinClient } from '@/lib/merlin';
+import { MerlinClient, type SiteLocation } from '@/lib/merlin';
 
 interface AuditLog {
   id: string;
@@ -66,6 +67,10 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
   const [verifyLocation, setVerifyLocation] = useState(true);
   const [deleteClientName, setDeleteClientName] = useState('');
   const [deleteClientId, setDeleteClientId] = useState('');
+  const [deleteLocations, setDeleteLocations] = useState<SiteLocation[]>([]);
+  const [selectedDeleteLocationId, setSelectedDeleteLocationId] = useState('');
+  const [locationsClientId, setLocationsClientId] = useState('');
+  const [isLoadingLocations, setIsLoadingLocations] = useState(false);
   
   // Process State
   const [isRunning, setIsRunning] = useState(false);
@@ -105,6 +110,12 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
 
   const clearConsole = () => {
     setLogs([]);
+  };
+
+  const resetDeleteLocations = () => {
+    setDeleteLocations([]);
+    setSelectedDeleteLocationId('');
+    setLocationsClientId('');
   };
 
   // Handle excel/csv uploads for creation
@@ -167,6 +178,50 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
     const updated = [newLog, ...auditLogs];
     setAuditLogs(updated);
     localStorage.setItem('soteria_audit_logs', JSON.stringify(updated));
+  };
+
+  const loadDeleteLocations = async () => {
+    const clientId = deleteClientId.trim();
+    if (!clientId) {
+      addLog('Client ID is required to load site locations.', 'warning');
+      return;
+    }
+
+    setIsLoadingLocations(true);
+    resetDeleteLocations();
+    addLog(`Loading site locations for client: ${clientId}...`, 'info');
+
+    const client = new MerlinClient(
+      {
+        apiUrl: deleteApiUrl,
+        username: deleteUsername,
+        password: deletePassword,
+      },
+      (msg) => {
+        if (msg.includes('failed') || msg.includes('Failed')) {
+          addLog(msg, 'danger');
+        } else {
+          addLog(msg, 'general');
+        }
+      }
+    );
+
+    const authenticated = await client.authenticate();
+    if (!authenticated) {
+      addLog('Authentication failed. Could not load locations.', 'danger');
+      setIsLoadingLocations(false);
+      return;
+    }
+
+    const locations = await client.fetchLocationsForClient(clientId);
+    setDeleteLocations(locations);
+    setLocationsClientId(clientId);
+    if (locations.length === 0) {
+      addLog('No site locations found for this Client ID.', 'warning');
+    } else {
+      addLog(`Location dropdown ready with ${locations.length} site locations.`, 'success');
+    }
+    setIsLoadingLocations(false);
   };
 
   const startBulkUpload = async () => {
@@ -320,8 +375,16 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
         return;
       }
 
-      addLog(`Fetching up to ${deleteLimit} work orders for client: ${clientId}...`, 'info');
-      const workOrders = await client.fetchWorkOrders(clientId, deleteLimit, deleteOnlyOverdue);
+      const locationId = selectedDeleteLocationId.trim();
+      if (locationId && locationsClientId !== clientId) {
+        addLog('Selected site locations are for a different Client ID. Load locations again.', 'danger');
+        setIsRunning(false);
+        return;
+      }
+
+      const selectedLocation = deleteLocations.find((loc) => loc.id === locationId);
+      addLog(`Fetching up to ${deleteLimit} work orders for client: ${clientId}${selectedLocation ? ` at location: ${selectedLocation.name}` : ''}...`, 'info');
+      const workOrders = await client.fetchWorkOrders(clientId, deleteLimit, deleteOnlyOverdue, locationId || undefined);
       
       if (workOrders.length === 0) {
         addLog('No work orders found matching criteria.', 'warning');
@@ -433,7 +496,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
 
     saveAuditLog(
       'delete',
-      deleteMode === 'sheet' ? (deleteFile?.name || 'Delete sheet') : `All for client: ${deleteClientName || deleteClientId}`,
+      deleteMode === 'sheet' ? (deleteFile?.name || 'Delete sheet') : `Client: ${deleteClientName || deleteClientId}${selectedDeleteLocationId ? ` | Location: ${deleteLocations.find((loc) => loc.id === selectedDeleteLocationId)?.name || selectedDeleteLocationId}` : ''}`,
       attemptedCount,
       successCount,
       failedCount
@@ -678,7 +741,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
                         className="input-field"
                         style={{ padding: '14px' }}
                         value={deleteMode}
-                        onChange={(e: any) => setDeleteMode(e.target.value)}
+                        onChange={(e) => setDeleteMode(e.target.value as 'sheet' | 'client_all')}
                         disabled={isRunning}
                       >
                         <option value="sheet">CSV/Excel Sheet file</option>
@@ -723,9 +786,47 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
                           style={{ paddingLeft: '14px' }}
                           placeholder="UUID (Safer)"
                           value={deleteClientId}
-                          onChange={(e) => setDeleteClientId(e.target.value)}
+                          onChange={(e) => {
+                            setDeleteClientId(e.target.value);
+                            resetDeleteLocations();
+                          }}
                           disabled={isRunning}
                         />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">SITE LOCATION</label>
+                        <select
+                          className="input-field"
+                          style={{ padding: '14px' }}
+                          value={selectedDeleteLocationId}
+                          onChange={(e) => setSelectedDeleteLocationId(e.target.value)}
+                          disabled={isRunning || isLoadingLocations || deleteLocations.length === 0}
+                        >
+                          <option value="">
+                            {deleteLocations.length === 0 ? 'Load locations first' : 'All site locations'}
+                          </option>
+                          {deleteLocations.map((location) => (
+                            <option key={location.id} value={location.id}>
+                              {location.code ? `${location.name} (${location.code})` : location.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">&nbsp;</label>
+                        <button
+                          type="button"
+                          className="action-btn secondary transition-all"
+                          onClick={loadDeleteLocations}
+                          disabled={isRunning || isLoadingLocations || !deleteClientId.trim()}
+                        >
+                          {isLoadingLocations ? (
+                            <span className="loading-spinner"></span>
+                          ) : (
+                            <MapPin size={16} />
+                          )}
+                          <span>{isLoadingLocations ? 'Loading Locations' : 'Load Locations'}</span>
+                        </button>
                       </div>
                     </div>
                   ) : (
@@ -818,7 +919,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
                   <button
                     className="action-btn danger-btn transition-all"
                     onClick={startBulkDelete}
-                    disabled={isRunning || (deleteMode === 'sheet' && deleteRows.length === 0)}
+                    disabled={isRunning || isLoadingLocations || (deleteMode === 'sheet' && deleteRows.length === 0)}
                   >
                     <Trash2 size={16} />
                     <span>{dryRun ? 'Simulate Deletes' : 'Perform Bulk Delete'}</span>
