@@ -879,7 +879,7 @@ export class MerlinClient {
       category: 'general',
       subject: subject,
       description: subject,
-      tags: tagIds,
+      tag: tagIds,
       l1_assignee: ownerId,
     };
 
