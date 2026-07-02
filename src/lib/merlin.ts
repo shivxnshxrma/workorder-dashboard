@@ -713,10 +713,12 @@ export class MerlinClient {
       return this.cache.locations[cacheKey];
     }
 
-    const params = {
-      search: cleanSearchValue,
-      client: clientId
+    const params: Record<string, any> = {
+      search: cleanSearchValue
     };
+    if (clientId && clientId.trim() !== '') {
+      params.client = clientId.trim();
+    }
 
     const res = await this.requestJson('GET', 'locations/', null, params);
     if (res.status === 200) {
