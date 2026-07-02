@@ -719,35 +719,70 @@ export class MerlinClient {
     };
 
     const res = await this.requestJson('GET', 'locations/', null, params);
-    if (res.status !== 200) {
+    if (res.status === 200) {
+      const items = res.data?.data?.items || [];
+      if (items.length > 0) {
+        const locId = items[0].id;
+        this.cache.locations[cacheKey] = locId;
+        this.log(`Found location: ${cleanSearchValue}`);
+        return locId;
+      }
+    } else {
       this.log(`❌ Location API failed: ${res.status}`);
       return null;
     }
 
-    const items = res.data?.data?.items || [];
-    if (items.length > 0) {
-      const locId = items[0].id;
-      this.cache.locations[cacheKey] = locId;
-      this.log(`Found location: ${cleanSearchValue}`);
-      return locId;
+    // Fallback 1: Replace underscores with spaces
+    if (cleanSearchValue.includes('_')) {
+      const spaceVal = cleanSearchValue.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+      this.log(`🔁 Retry location (replace underscores): "${spaceVal}"`);
+      const fallbackId = await this.getTicketLocationId(spaceVal, clientId);
+      if (fallbackId) {
+        this.cache.locations[cacheKey] = fallbackId;
+        return fallbackId;
+      }
     }
 
-    // Retry: remove brackets
+    // Fallback 2: Remove brackets
     if (cleanSearchValue.includes('(')) {
       const shortVal = cleanSearchValue.split('(')[0].trim();
-      this.log(`🔁 Retry location (remove brackets): ${shortVal}`);
-      return this.getTicketLocationId(shortVal, clientId);
+      this.log(`🔁 Retry location (remove brackets): "${shortVal}"`);
+      const fallbackId = await this.getTicketLocationId(shortVal, clientId);
+      if (fallbackId) {
+        this.cache.locations[cacheKey] = fallbackId;
+        return fallbackId;
+      }
     }
 
-    // Retry: short search
+    // Fallback 3: Clean numbers/symbols
+    const cleanName = cleanSearchValue
+      .replace(/[0-9.]+/g, '')
+      .replace(/[-_()]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (cleanName !== cleanSearchValue && cleanName.length > 0) {
+      this.log(`🔁 Retry location (cleaned): "${cleanName}"`);
+      const fallbackId = await this.getTicketLocationId(cleanName, clientId);
+      if (fallbackId) {
+        this.cache.locations[cacheKey] = fallbackId;
+        return fallbackId;
+      }
+    }
+
+    // Fallback 4: Short search
     const words = cleanSearchValue.split(/\s+/);
     if (words.length > 2) {
       const shortVal = words.slice(0, 2).join(' ');
-      this.log(`🔁 Retry location (short): ${shortVal}`);
-      return this.getTicketLocationId(shortVal, clientId);
+      this.log(`🔁 Retry location (short): "${shortVal}"`);
+      const fallbackId = await this.getTicketLocationId(shortVal, clientId);
+      if (fallbackId) {
+        this.cache.locations[cacheKey] = fallbackId;
+        return fallbackId;
+      }
     }
 
-    this.log(`❌ Location not found: ${cleanSearchValue}`);
+    this.log(`❌ Location not found: "${cleanSearchValue}"`);
     return null;
   }
 
