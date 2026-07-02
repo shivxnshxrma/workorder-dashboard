@@ -44,7 +44,7 @@ interface LogLine {
 const MAX_DELETE_WORKERS = 10;
 
 export default function DashboardClient({ userEmail, onLogout }: { userEmail: string; onLogout: () => void }) {
-  const [activeTab, setActiveTab] = useState<'upload' | 'delete' | 'logs'>('upload');
+  const [activeTab, setActiveTab] = useState<'upload' | 'ticket_upload' | 'delete' | 'logs'>('upload');
   
   // App Configs
   const [uploadApiUrl, setUploadApiUrl] = useState('https://api-mneo-cbre.merlin-soteria.in/api/v1/');
@@ -54,6 +54,16 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
   const [deleteApiUrl, setDeleteApiUrl] = useState('https://api-merlin.tenonfm-india.com/api/v1/');
   const [deleteUsername, setDeleteUsername] = useState('');
   const [deletePassword, setDeletePassword] = useState('');
+
+  // Ticket Upload Configs & State (using credentials from ticket_bulk_upload.txt)
+  const [ticketApiUrl, setTicketApiUrl] = useState('https://api-mneo.soteria.in/api/v1/');
+  const [ticketEmail, setTicketEmail] = useState('anuj.mourya@soteria.in');
+  const [ticketPassword, setTicketPassword] = useState('Anuj2312@');
+  const [ticketClientId, setTicketClientId] = useState('a699bab9-3d3a-4ca4-b572-f6383cf47233');
+  const [ticketTypeId, setTicketTypeId] = useState('7150d7cd-845a-4900-a316-21bbf6ab662e');
+  const [ticketPriorityId, setTicketPriorityId] = useState('5eb3ecec-9303-4900-8a83-a081f8f1ef25');
+  const [ticketFile, setTicketFile] = useState<File | null>(null);
+  const [ticketRows, setTicketRows] = useState<any[]>([]);
   
   // Upload State
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -144,6 +154,29 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
         const rows = XLSX.utils.sheet_to_json(sheet);
         setUploadRows(rows);
         addLog(`File loaded: "${file.name}" with ${rows.length} rows.`, 'info');
+      } catch (err: any) {
+        addLog(`Failed to parse file: ${err.message}`, 'danger');
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  // Handle excel/csv uploads for ticket creation
+  const handleTicketFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setTicketFile(file);
+    
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = evt.target?.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const rows = XLSX.utils.sheet_to_json(sheet);
+        setTicketRows(rows);
+        addLog(`Ticket file loaded: "${file.name}" with ${rows.length} rows.`, 'info');
       } catch (err: any) {
         addLog(`Failed to parse file: ${err.message}`, 'danger');
       }
@@ -344,6 +377,108 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
     addLog(`Failed: ${failedCount}`, 'danger');
 
     saveAuditLog('upload', uploadFile?.name || 'Excel/CSV file', uploadRows.length, successCount, failedCount);
+    stopRequestedRef.current = false;
+    setIsRunning(false);
+    setIsStopping(false);
+  };
+
+  const startTicketBulkUpload = async (isDryRun: boolean) => {
+    if (ticketRows.length === 0) {
+      addLog('No rows to upload. Please upload an Excel/CSV file first.', 'warning');
+      return;
+    }
+
+    stopRequestedRef.current = false;
+    setIsStopping(false);
+    setIsRunning(true);
+    setProgress(0);
+    setStats({ total: ticketRows.length, current: 0, success: 0, failed: 0 });
+    clearConsole();
+
+    addLog(`Starting ticket bulk upload sequence ${isDryRun ? '(DRY RUN)' : ''}...`, 'info');
+
+    const client = new MerlinClient(
+      {
+        apiUrl: ticketApiUrl,
+        username: ticketEmail,
+        password: ticketPassword,
+      },
+      (msg) => {
+        if (msg.includes('success') || msg.includes('successful') || msg.includes('Created →') || msg.includes('Found owner') || msg.includes('Found location')) {
+          addLog(msg, 'success');
+        } else if (msg.includes('Warning') || msg.includes('warning') || msg.includes('Skipping')) {
+          addLog(msg, 'warning');
+        } else if (msg.includes('Failed') || msg.includes('failed') || msg.includes('Error') || msg.includes('❌')) {
+          addLog(msg, 'danger');
+        } else if (msg.includes('Retry')) {
+          addLog(msg, 'info');
+        } else {
+          addLog(msg, 'general');
+        }
+      }
+    );
+
+    const authenticated = await client.authenticate();
+    if (!authenticated) {
+      addLog('Authentication failed. Terminating upload.', 'danger');
+      setIsRunning(false);
+      setIsStopping(false);
+      return;
+    }
+
+    let successCount = 0;
+    let failedCount = 0;
+
+    for (let i = 0; i < ticketRows.length; i++) {
+      if (stopRequestedRef.current) {
+        addLog(`Upload stopped. ${ticketRows.length - i} row(s) left unprocessed.`, 'warning');
+        break;
+      }
+
+      const row = ticketRows[i];
+      const normalisedRow: Record<string, any> = {};
+      Object.keys(row).forEach(key => {
+        normalisedRow[key.trim().toLowerCase()] = row[key];
+      });
+      const subject = normalisedRow['subject'] || normalisedRow['subject '] || 'Auto Ticket';
+
+      addLog(`Processing row ${i + 1}/${ticketRows.length}: "${subject}"...`, 'general');
+      
+      try {
+        const success = await client.createTicket(
+          row,
+          ticketClientId,
+          ticketTypeId,
+          ticketPriorityId,
+          isDryRun
+        );
+        if (success) {
+          successCount++;
+        } else {
+          failedCount++;
+        }
+      } catch (err: any) {
+        addLog(`Exception creating ticket in row ${i + 1}: ${err.message}`, 'danger');
+        failedCount++;
+      }
+
+      const current = i + 1;
+      setStats({
+        total: ticketRows.length,
+        current,
+        success: successCount,
+        failed: failedCount,
+      });
+      setProgress(Math.round((current / ticketRows.length) * 100));
+    }
+
+    const uploadStopped = stopRequestedRef.current;
+    addLog(`\n--- Ticket Upload Process ${uploadStopped ? 'Stopped' : 'Completed'} ---`, uploadStopped ? 'warning' : 'info');
+    addLog(`Total Processed: ${ticketRows.length}`, 'general');
+    addLog(`${isDryRun ? 'Dry Run Simulated' : 'Successfully Created'}: ${successCount}`, 'success');
+    addLog(`Failed: ${failedCount}`, 'danger');
+
+    saveAuditLog('upload', `Tickets: ${ticketFile?.name || 'Excel/CSV file'}${isDryRun ? ' (Dry Run)' : ''}`, ticketRows.length, successCount, failedCount);
     stopRequestedRef.current = false;
     setIsRunning(false);
     setIsStopping(false);
@@ -620,7 +755,17 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
                 disabled={isRunning}
               >
                 <Upload size={18} />
-                <span>Bulk Upload</span>
+                <span>Bulk WO Upload</span>
+              </button>
+            </li>
+            <li className="nav-item">
+              <button
+                className={`nav-link transition-all ${activeTab === 'ticket_upload' ? 'active' : ''}`}
+                onClick={() => { setActiveTab('ticket_upload'); clearConsole(); }}
+                disabled={isRunning}
+              >
+                <Upload size={18} />
+                <span>Bulk Ticket Upload</span>
               </button>
             </li>
             <li className="nav-item">
@@ -669,11 +814,13 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
           <div>
             <h1 className="page-title">
               {activeTab === 'upload' && 'Bulk Work Order Upload'}
+              {activeTab === 'ticket_upload' && 'Bulk Ticket Upload'}
               {activeTab === 'delete' && 'Bulk Work Order Delete'}
               {activeTab === 'logs' && 'Audit Log Trail'}
             </h1>
             <p className="page-subtitle">
               {activeTab === 'upload' && 'Upload Excel sheets to create work orders in bulk across clients.'}
+              {activeTab === 'ticket_upload' && 'Upload Excel sheets to create tickets in bulk.'}
               {activeTab === 'delete' && 'Clean up work orders in bulk from database search or excel sheets.'}
               {activeTab === 'logs' && 'Historical records of all uploads and deletes processed.'}
             </p>
@@ -684,7 +831,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
           <div className="dashboard-grid">
             {/* Left Column: Configurations & Files */}
             <div className="glass-panel animated-slide-up" style={{ animationDelay: '0.1s' }}>
-              {activeTab === 'upload' ? (
+              {activeTab === 'upload' && (
                 <>
                   <div className="panel-header">
                     <Settings size={18} />
@@ -782,7 +929,155 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
                     )}
                   </div>
                 </>
-              ) : (
+              )}
+
+              {activeTab === 'ticket_upload' && (
+                <>
+                  <div className="panel-header">
+                    <Settings size={18} />
+                    <span>Ticket Upload Configurations</span>
+                  </div>
+
+                  <div className="form-grid">
+                    <div className="input-group">
+                      <label className="input-label">API URL</label>
+                      <input
+                        type="text"
+                        className="input-field"
+                        style={{ paddingLeft: '14px' }}
+                        value={ticketApiUrl}
+                        onChange={(e) => setTicketApiUrl(e.target.value)}
+                        disabled={isRunning}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="form-grid two-col">
+                    <div className="input-group">
+                      <label className="input-label">EMAIL</label>
+                      <input
+                        type="text"
+                        className="input-field"
+                        style={{ paddingLeft: '14px' }}
+                        value={ticketEmail}
+                        onChange={(e) => setTicketEmail(e.target.value)}
+                        disabled={isRunning}
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">PASSWORD</label>
+                      <input
+                        type="password"
+                        className="input-field"
+                        style={{ paddingLeft: '14px' }}
+                        value={ticketPassword}
+                        onChange={(e) => setTicketPassword(e.target.value)}
+                        disabled={isRunning}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="form-grid two-col">
+                    <div className="input-group">
+                      <label className="input-label">CLIENT ID</label>
+                      <input
+                        type="text"
+                        className="input-field"
+                        style={{ paddingLeft: '14px' }}
+                        value={ticketClientId}
+                        onChange={(e) => setTicketClientId(e.target.value)}
+                        disabled={isRunning}
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">TICKET TYPE ID</label>
+                      <input
+                        type="text"
+                        className="input-field"
+                        style={{ paddingLeft: '14px' }}
+                        value={ticketTypeId}
+                        onChange={(e) => setTicketTypeId(e.target.value)}
+                        disabled={isRunning}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="form-grid">
+                    <div className="input-group">
+                      <label className="input-label">PRIORITY ID</label>
+                      <input
+                        type="text"
+                        className="input-field"
+                        style={{ paddingLeft: '14px' }}
+                        value={ticketPriorityId}
+                        onChange={(e) => setTicketPriorityId(e.target.value)}
+                        disabled={isRunning}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="panel-header" style={{ marginTop: '24px', marginBottom: '16px' }}>
+                    <FileSpreadsheet size={18} />
+                    <span>Tickets Excel or CSV Sheet File</span>
+                  </div>
+
+                  <div className={`file-uploader ${ticketFile ? 'has-file' : ''}`}>
+                    <div className="file-uploader-icon">
+                      <Upload size={20} />
+                    </div>
+                    <div className="file-info">
+                      {ticketFile ? (
+                        <div>
+                          File selected: <span className="file-name">{ticketFile.name}</span>
+                          <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                            Rows detected: {ticketRows.length}
+                          </div>
+                        </div>
+                      ) : (
+                        <span>Drag and drop Excel/CSV or Click to Browse</span>
+                      )}
+                    </div>
+                    <input
+                      type="file"
+                      className="file-uploader-input"
+                      accept=".xlsx, .xls, .csv"
+                      onChange={handleTicketFileChange}
+                      disabled={isRunning}
+                    />
+                  </div>
+
+                  <div className="action-row" style={{ display: 'flex', gap: '10px' }}>
+                    <button
+                      className="action-btn secondary transition-all"
+                      onClick={() => startTicketBulkUpload(true)}
+                      disabled={isRunning || ticketRows.length === 0}
+                    >
+                      <Play size={16} />
+                      <span>Dry Run Test</span>
+                    </button>
+                    <button
+                      className="action-btn transition-all"
+                      onClick={() => startTicketBulkUpload(false)}
+                      disabled={isRunning || ticketRows.length === 0}
+                    >
+                      <Play size={16} />
+                      <span>Start Bulk Upload</span>
+                    </button>
+                    {isRunning && (
+                      <button
+                        className="action-btn stop-btn transition-all"
+                        onClick={requestStop}
+                        disabled={isStopping}
+                      >
+                        <X size={16} />
+                        <span>{isStopping ? 'Stopping' : 'Stop'}</span>
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {activeTab === 'delete' && (
                 <>
                   <div className="panel-header">
                     <Settings size={18} />

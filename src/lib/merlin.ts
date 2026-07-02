@@ -25,6 +25,7 @@ export class MerlinClient {
     teams: Record<string, string>;
     tags: Record<string, string>;
     assets: Record<string, string>;
+    users: Record<string, string>;
   } = {
     clients: {},
     locations: {},
@@ -33,6 +34,7 @@ export class MerlinClient {
     teams: {},
     tags: {},
     assets: {},
+    users: {},
   };
 
   constructor(config: MerlinConfig, onLog: (msg: string) => void) {
@@ -697,5 +699,157 @@ export class MerlinClient {
 
     this.log(`Failed delete: ${id}. Status: ${res.status}, Response: ${JSON.stringify(res.data)}`);
     return false;
+  }
+
+  // ================= TICKET BULK UPLOAD HELPERS =================
+
+  public async getTicketLocationId(searchValue: string, clientId: string): Promise<string | null> {
+    if (!searchValue) return null;
+
+    const cleanSearchValue = String(searchValue).trim();
+    const cacheKey = `${cleanSearchValue}_${clientId}`;
+
+    if (this.cache.locations[cacheKey]) {
+      return this.cache.locations[cacheKey];
+    }
+
+    const params = {
+      search: cleanSearchValue,
+      client: clientId
+    };
+
+    const res = await this.requestJson('GET', 'locations/', null, params);
+    if (res.status !== 200) {
+      this.log(`❌ Location API failed: ${res.status}`);
+      return null;
+    }
+
+    const items = res.data?.data?.items || [];
+    if (items.length > 0) {
+      const locId = items[0].id;
+      this.cache.locations[cacheKey] = locId;
+      this.log(`Found location: ${cleanSearchValue}`);
+      return locId;
+    }
+
+    // Retry: remove brackets
+    if (cleanSearchValue.includes('(')) {
+      const shortVal = cleanSearchValue.split('(')[0].trim();
+      this.log(`🔁 Retry location (remove brackets): ${shortVal}`);
+      return this.getTicketLocationId(shortVal, clientId);
+    }
+
+    // Retry: short search
+    const words = cleanSearchValue.split(/\s+/);
+    if (words.length > 2) {
+      const shortVal = words.slice(0, 2).join(' ');
+      this.log(`🔁 Retry location (short): ${shortVal}`);
+      return this.getTicketLocationId(shortVal, clientId);
+    }
+
+    this.log(`❌ Location not found: ${cleanSearchValue}`);
+    return null;
+  }
+
+  public async getTicketMemberId(searchValue: string): Promise<string | null> {
+    if (!searchValue) return null;
+
+    const cleanSearchValue = String(searchValue).trim().toLowerCase();
+
+    if (this.cache.users[cleanSearchValue]) {
+      return this.cache.users[cleanSearchValue];
+    }
+
+    const res = await this.requestJson('GET', 'members/', null, { search: cleanSearchValue });
+    if (res.status !== 200) {
+      this.log(`❌ Members API failed: ${res.status}`);
+      return null;
+    }
+
+    const items = res.data?.data?.items || [];
+    for (const item of items) {
+      const user = item.user || {};
+      const firstName = user.first_name || '';
+      const lastName = user.last_name || '';
+      const fullName = `${firstName} ${lastName}`.trim().toLowerCase();
+
+      const searchWords = cleanSearchValue.split(/\s+/);
+      const allWordsMatched = searchWords.every(word => fullName.includes(word));
+
+      if (allWordsMatched) {
+        const userId = user.id;
+        this.cache.users[cleanSearchValue] = userId;
+        this.log(`Found owner: ${firstName} ${lastName}`);
+        return userId;
+      }
+    }
+
+    this.log(`❌ Owner not found: ${cleanSearchValue}`);
+    return null;
+  }
+
+  public async createTicket(
+    row: Record<string, any>,
+    clientId: string,
+    ticketTypeId: string,
+    priorityId: string,
+    dryRun: boolean
+  ): Promise<boolean> {
+    const normalisedRow: Record<string, any> = {};
+    Object.keys(row).forEach(key => {
+      normalisedRow[key.trim().toLowerCase()] = row[key];
+    });
+
+    let subject = String(normalisedRow['subject'] || '').trim();
+    if (!subject || subject.toLowerCase() === 'nan') {
+      subject = 'Auto Ticket';
+    }
+
+    const locationVal = normalisedRow['location'];
+    const ownerVal = normalisedRow['owner'];
+
+    const locationId = await this.getTicketLocationId(locationVal, clientId);
+    const ownerId = await this.getTicketMemberId(ownerVal);
+
+    if (!locationId) {
+      this.log(`❌ Location not found: "${locationVal}"`);
+      return false;
+    }
+
+    if (!ownerId) {
+      this.log(`❌ Owner not found: "${ownerVal}"`);
+      return false;
+    }
+
+    const tagsVal = normalisedRow['tags'];
+    const tagsArray = tagsVal ? [tagsVal] : [];
+
+    const payload = {
+      client: clientId,
+      location: locationId,
+      type: ticketTypeId,
+      priority: priorityId,
+      status: 'open',
+      category: 'general',
+      subject: subject,
+      description: subject,
+      tags: tagsArray,
+      l1_assignee: ownerId,
+    };
+
+    if (dryRun) {
+      this.log(`[DRY RUN] Would create Ticket: "${subject}" | Location: "${locationVal}" (ID: ${locationId}) | Owner: "${ownerVal}" (ID: ${ownerId})`);
+      return true;
+    }
+
+    const res = await this.requestJson('POST', 'tickets/', payload);
+    if (res.status === 200 || res.status === 201) {
+      this.log(`✅ Created → ${subject}`);
+      return true;
+    } else {
+      const responseText = typeof res.data === 'object' ? JSON.stringify(res.data) : String(res.data || '');
+      this.log(`❌ Failed → ${subject}. Status: ${res.status}, Response: ${responseText}`);
+      return false;
+    }
   }
 }
