@@ -426,6 +426,16 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       return;
     }
 
+    addLog('Validating target configuration IDs...', 'info');
+    try {
+      const details = await client.fetchConfigDetails(ticketClientId, ticketTypeId, ticketPriorityId);
+      addLog(`🎯 Target Client: ${details.clientName} (ID: ${ticketClientId})`, 'success');
+      addLog(`🎯 Ticket Type: ${details.ticketTypeName} (ID: ${ticketTypeId})`, 'success');
+      addLog(`🎯 Priority: ${details.priorityName} (ID: ${ticketPriorityId})`, 'success');
+    } catch (err: any) {
+      addLog(`⚠️ Validation check failed: ${err.message}`, 'warning');
+    }
+
     let successCount = 0;
     let failedCount = 0;
 

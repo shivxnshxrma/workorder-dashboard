@@ -887,4 +887,33 @@ export class MerlinClient {
       return false;
     }
   }
+
+  public async fetchConfigDetails(clientId: string, ticketTypeId: string, priorityId: string) {
+    let clientName = 'Unknown';
+    let ticketTypeName = 'Unknown';
+    let priorityName = 'Unknown';
+
+    if (clientId) {
+      const res = await this.requestJson('GET', `clients/${clientId}/`);
+      if (res.status === 200) {
+        clientName = res.data?.data?.name || res.data?.name || 'Unknown';
+      }
+    }
+
+    if (ticketTypeId) {
+      const res = await this.requestJson('GET', `ticket-types/${ticketTypeId}/`);
+      if (res.status === 200) {
+        ticketTypeName = res.data?.data?.name || res.data?.name || 'Unknown';
+      }
+    }
+
+    if (priorityId) {
+      const res = await this.requestJson('GET', `ticket-priorities/${priorityId}/`);
+      if (res.status === 200) {
+        priorityName = res.data?.data?.name || res.data?.name || 'Unknown';
+      }
+    }
+
+    return { clientName, ticketTypeName, priorityName };
+  }
 }
