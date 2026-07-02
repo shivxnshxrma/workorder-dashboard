@@ -857,7 +857,16 @@ export class MerlinClient {
     }
 
     const tagsVal = normalisedRow['tags'];
-    const tagsArray = tagsVal ? [tagsVal] : [];
+    const tagIds: number[] = [];
+    if (tagsVal && String(tagsVal).trim() !== '' && String(tagsVal).toLowerCase() !== 'nan') {
+      const tagList = String(tagsVal).split(',').map(t => t.trim()).filter(Boolean);
+      for (const name of tagList) {
+        const id = await this.getTicketTagId(name);
+        if (id !== null) {
+          tagIds.push(id);
+        }
+      }
+    }
 
     const payload = {
       client: clientId,
@@ -868,12 +877,12 @@ export class MerlinClient {
       category: 'general',
       subject: subject,
       description: subject,
-      tags: tagsArray,
+      tags: tagIds,
       l1_assignee: ownerId,
     };
 
     if (dryRun) {
-      this.log(`[DRY RUN] Would create Ticket: "${subject}" | Location: "${locationVal}" (ID: ${locationId}) | Owner: "${ownerVal}" (ID: ${ownerId})`);
+      this.log(`[DRY RUN] Would create Ticket: "${subject}" | Location: "${locationVal}" (ID: ${locationId}) | Owner: "${ownerVal}" (ID: ${ownerId}) | Tags: ${JSON.stringify(tagIds)}`);
       return true;
     }
 
@@ -886,6 +895,37 @@ export class MerlinClient {
       this.log(`❌ Failed → ${subject}. Status: ${res.status}, Response: ${responseText}`);
       return false;
     }
+  }
+
+  public async getTicketTagId(tagName: string): Promise<number | null> {
+    if (!tagName) return null;
+    const cleanTagName = tagName.trim();
+    
+    // Check cache
+    const cacheKey = `ticket_tag_${cleanTagName.toLowerCase()}`;
+    if (this.cache.tags[cacheKey]) {
+      return Number(this.cache.tags[cacheKey]);
+    }
+
+    // If already an integer ID
+    if (/^\d+$/.test(cleanTagName)) {
+      return parseInt(cleanTagName, 10);
+    }
+
+    const res = await this.requestJson('GET', 'tags/', null, { search: cleanTagName });
+    if (res.status === 200) {
+      const items = res.data?.data?.items || res.data?.items || [];
+      const exactMatch = items.find((item: any) => String(item.name).toLowerCase() === cleanTagName.toLowerCase());
+      const selected = exactMatch || items[0];
+      if (selected && selected.id !== undefined) {
+        this.cache.tags[cacheKey] = String(selected.id);
+        this.log(`Resolved tag: "${cleanTagName}" to ID ${selected.id}`);
+        return Number(selected.id);
+      }
+    }
+
+    this.log(`⚠️ Warning: Tag "${cleanTagName}" not found in API.`);
+    return null;
   }
 
   public async fetchConfigDetails(clientId: string, ticketTypeId: string, priorityId: string) {
