@@ -888,11 +888,11 @@ export class MerlinClient {
 
     const res = await this.requestJson('POST', 'tickets/', payload);
     if (res.status === 200 || res.status === 201) {
-      this.log(`✅ Created → ${subject}`);
+      this.log(`✅ Created → Subject: "${subject}" | Location: "${locationVal}" (ID: ${locationId}) | Owner: "${ownerVal}" (ID: ${ownerId}) | Tags: ${JSON.stringify(tagIds)}`);
       return true;
     } else {
       const responseText = typeof res.data === 'object' ? JSON.stringify(res.data) : String(res.data || '');
-      this.log(`❌ Failed → ${subject}. Status: ${res.status}, Response: ${responseText}`);
+      this.log(`❌ Failed → Subject: "${subject}" | Location: "${locationVal}" (ID: ${locationId}) | Owner: "${ownerVal}" (ID: ${ownerId}) | Tags: ${JSON.stringify(tagIds)}. Status: ${res.status}, Response: ${responseText}`);
       return false;
     }
   }

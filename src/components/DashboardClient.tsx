@@ -95,7 +95,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   
-  const consoleEndRef = useRef<HTMLDivElement>(null);
+  const consoleBoxRef = useRef<HTMLDivElement>(null);
   const stopRequestedRef = useRef(false);
 
   // Load audit logs from localStorage on mount
@@ -110,12 +110,12 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
     }
   }, []);
 
-  // Keep console stable during deletes so the user can inspect earlier lines.
+  // Keep console stable by scrolling the box to the bottom without scrolling the main page window.
   useEffect(() => {
-    if (activeTab !== 'delete' && consoleEndRef.current) {
-      consoleEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (consoleBoxRef.current) {
+      consoleBoxRef.current.scrollTop = consoleBoxRef.current.scrollHeight;
     }
-  }, [activeTab, logs]);
+  }, [logs]);
 
   const addLog = (text: string, type: LogLine['type'] = 'general') => {
     const timestamp = new Date().toLocaleTimeString();
@@ -1380,7 +1380,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
                 </button>
               </div>
 
-              <div className="console-box">
+              <div className="console-box" ref={consoleBoxRef}>
                 {logs.length === 0 ? (
                   <div className="log-line log-debug">Console idle. Awaiting configuration launch...</div>
                 ) : (
@@ -1400,7 +1400,6 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
                     </div>
                   ))
                 )}
-                <div ref={consoleEndRef} />
               </div>
             </div>
           </div>
