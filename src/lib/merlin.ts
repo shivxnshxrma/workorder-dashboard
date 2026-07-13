@@ -285,7 +285,10 @@ export class MerlinClient {
       // Filter by client if required
       if (items.length > 0 && clientId) {
         items = items.filter((item: any) => {
-          const clientRef = item.client || item.client_id;
+          const clientRef = item.client !== undefined ? item.client : item.client_id;
+          if (clientRef === undefined) {
+            return true;
+          }
           if (typeof clientRef === 'object' && clientRef !== null) {
             return clientRef.id === clientId;
           }
