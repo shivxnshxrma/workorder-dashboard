@@ -38,11 +38,25 @@ export class MerlinClient {
     };
 
   constructor(config: MerlinConfig, onLog: (msg: string) => void) {
+    this.onLog = onLog;
+    let url = config.apiUrl.trim();
+
+    // Automatically correct frontend URL patterns to backend API patterns
+    if (url.includes('app-merlin.tenonfm-india.com')) {
+      url = url.replace('app-merlin.tenonfm-india.com', 'api-merlin.tenonfm-india.com');
+      this.log(`⚠️ Automatically corrected API URL from "app-merlin" to "api-merlin": ${url}`);
+    } else if (url.includes('app-mneo.soteria.in')) {
+      url = url.replace('app-mneo.soteria.in', 'api-mneo.soteria.in');
+      this.log(`⚠️ Automatically corrected API URL from "app-mneo" to "api-mneo": ${url}`);
+    } else if (url.includes('app-mneo-cbre.merlin-soteria.in')) {
+      url = url.replace('app-mneo-cbre.merlin-soteria.in', 'api-mneo-cbre.merlin-soteria.in');
+      this.log(`⚠️ Automatically corrected API URL from "app-mneo-cbre" to "api-mneo-cbre": ${url}`);
+    }
+
     // Standardize URL to end with slash
-    this.apiUrl = config.apiUrl.endsWith('/') ? config.apiUrl : `${config.apiUrl}/`;
+    this.apiUrl = url.endsWith('/') ? url : `${url}/`;
     this.username = config.username;
     this.password = config.password;
-    this.onLog = onLog;
   }
 
   private log(message: string) {
@@ -203,6 +217,51 @@ export class MerlinClient {
     return 3600;
   }
 
+  // Fuzzy lookup helper for clients in the cache
+  private findClientInCache(name: string): string | null {
+    if (!name) return null;
+    const cleanSearch = name.trim().toLowerCase();
+
+    // 1. Exact case-insensitive match (since cache keys are lowercased)
+    if (this.cache.clients[cleanSearch]) {
+      return this.cache.clients[cleanSearch];
+    }
+
+    // 2. Normalized check (remove corporate suffixes and symbols)
+    const normalize = (s: string) =>
+      s.toLowerCase()
+       .replace(/\b(ltd|limited|pvt|private)\b/g, '')
+       .replace(/[^a-z0-9]/g, '')
+       .trim();
+
+    const normalizedSearch = normalize(cleanSearch);
+    if (normalizedSearch) {
+      for (const [cachedName, id] of Object.entries(this.cache.clients)) {
+        if (normalize(cachedName) === normalizedSearch) {
+          return id;
+        }
+      }
+    }
+
+    // 3. Substring check: search term is in cached name or vice-versa
+    for (const [cachedName, id] of Object.entries(this.cache.clients)) {
+      if (cachedName.includes(cleanSearch) || cleanSearch.includes(cachedName)) {
+        return id;
+      }
+    }
+
+    // 4. Default to single client in cache if there is only 1
+    const cachedClientNames = Object.keys(this.cache.clients);
+    if (cachedClientNames.length === 1) {
+      const singleClientName = cachedClientNames[0];
+      const singleClientId = this.cache.clients[singleClientName];
+      this.log(`⚠️ Client "${name}" not found. Defaulting to the only available client: "${singleClientName}" (${singleClientId})`);
+      return singleClientId;
+    }
+
+    return null;
+  }
+
   // Preloaders
   public async preloadGeneralCache() {
     this.log('Preloading general cache (clients, work order types, tags)...');
@@ -212,9 +271,11 @@ export class MerlinClient {
     if (res.status === 200) {
       const items = res.data?.data?.items || [];
       items.forEach((item: any) => {
-        this.cache.clients[item.name] = item.id;
+        if (item.name) {
+          this.cache.clients[item.name.toLowerCase()] = item.id;
+        }
       });
-      this.log(`Loaded ${items.length} clients into cache.`);
+      this.log(`Loaded ${items.length} clients into cache: ${JSON.stringify(Object.keys(this.cache.clients))}`);
     }
 
     // Work Order Types
@@ -222,7 +283,9 @@ export class MerlinClient {
     if (res.status === 200) {
       const items = res.data?.data?.items || [];
       items.forEach((item: any) => {
-        this.cache.work_order_types[item.name.trim()] = item.id;
+        if (item.name) {
+          this.cache.work_order_types[item.name.trim().toLowerCase()] = item.id;
+        }
       });
       this.log(`Loaded ${items.length} work order types into cache.`);
     }
@@ -232,7 +295,9 @@ export class MerlinClient {
     if (res.status === 200) {
       const items = res.data?.data?.items || [];
       items.forEach((item: any) => {
-        this.cache.tags[item.name.trim()] = item.id;
+        if (item.name) {
+          this.cache.tags[item.name.trim().toLowerCase()] = item.id;
+        }
       });
       this.log(`Loaded ${items.length} tags into cache.`);
     }
@@ -252,8 +317,10 @@ export class MerlinClient {
       if (res.status === 200) {
         const items = res.data?.data?.items || [];
         items.forEach((item: any) => {
-          const lookupKey = `${item.name}_${clientId}`;
-          this.cache[ep.key][lookupKey] = item.id;
+          if (item.name) {
+            const lookupKey = `${item.name.toLowerCase()}_${clientId}`;
+            this.cache[ep.key][lookupKey] = item.id;
+          }
         });
       }
     }
@@ -267,10 +334,18 @@ export class MerlinClient {
     endpoint: string,
     clientId?: string
   ): Promise<string | null> {
-    const lookupKey = clientId ? `${searchValue}_${clientId}` : searchValue;
+    const searchLower = searchValue.toLowerCase();
+    const lookupKey = clientId ? `${searchLower}_${clientId}` : searchLower;
 
     if (this.cache[cacheKey][lookupKey]) {
       return this.cache[cacheKey][lookupKey];
+    }
+
+    if (cacheKey === 'clients') {
+      const cachedId = this.findClientInCache(searchValue);
+      if (cachedId) {
+        return cachedId;
+      }
     }
 
     const params: Record<string, any> = { search: searchValue };
@@ -303,7 +378,20 @@ export class MerlinClient {
         );
         const selected = exactMatch || items[0];
         this.cache[cacheKey][lookupKey] = selected.id;
+        if (cacheKey === 'clients' && selected.name) {
+          this.cache.clients[selected.name.toLowerCase()] = selected.id;
+        }
         return selected.id;
+      }
+    }
+
+    if (cacheKey === 'clients') {
+      const cachedClientNames = Object.keys(this.cache.clients);
+      if (cachedClientNames.length === 1) {
+        const singleClientName = cachedClientNames[0];
+        const singleClientId = this.cache.clients[singleClientName];
+        this.log(`⚠️ Client "${searchValue}" not found after API search. Defaulting to the only available client: "${singleClientName}" (${singleClientId})`);
+        return singleClientId;
       }
     }
 
@@ -553,6 +641,11 @@ export class MerlinClient {
     if (!clientName) {
       return null;
     }
+    const cachedId = this.findClientInCache(clientName);
+    if (cachedId) {
+      return cachedId;
+    }
+
     const res = await this.requestJson('GET', 'clients/', null, { search: clientName });
     if (res.status === 200) {
       const items = res.data?.data?.items || [];
@@ -560,9 +653,21 @@ export class MerlinClient {
       const selected = exact || items[0];
       if (selected) {
         this.log(`Selected client: ${selected.name} (${selected.id})`);
+        if (selected.name) {
+          this.cache.clients[selected.name.toLowerCase()] = selected.id;
+        }
         return selected.id;
       }
     }
+
+    const cachedClientNames = Object.keys(this.cache.clients);
+    if (cachedClientNames.length === 1) {
+      const singleClientName = cachedClientNames[0];
+      const singleClientId = this.cache.clients[singleClientName];
+      this.log(`⚠️ Client "${clientName}" not found after API search. Defaulting to the only available client: "${singleClientName}" (${singleClientId})`);
+      return singleClientId;
+    }
+
     return null;
   }
 
@@ -722,7 +827,7 @@ export class MerlinClient {
     if (!searchValue) return null;
 
     const cleanSearchValue = String(searchValue).trim();
-    const cacheKey = `${cleanSearchValue}_${clientId}`;
+    const cacheKey = `${cleanSearchValue.toLowerCase()}_${clientId}`;
 
     if (this.cache.locations[cacheKey]) {
       return this.cache.locations[cacheKey];

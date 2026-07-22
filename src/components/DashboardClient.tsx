@@ -864,7 +864,6 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
                         value={uploadApiUrl}
                         onChange={(e) => setUploadApiUrl(e.target.value)}
                         disabled={isRunning}
-                        readOnly
                       />
                     </div>
                   </div>
