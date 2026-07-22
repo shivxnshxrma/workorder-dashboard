@@ -27,15 +27,15 @@ export class MerlinClient {
     assets: Record<string, string>;
     users: Record<string, string>;
   } = {
-    clients: {},
-    locations: {},
-    forms: {},
-    work_order_types: {},
-    teams: {},
-    tags: {},
-    assets: {},
-    users: {},
-  };
+      clients: {},
+      locations: {},
+      forms: {},
+      work_order_types: {},
+      teams: {},
+      tags: {},
+      assets: {},
+      users: {},
+    };
 
   constructor(config: MerlinConfig, onLog: (msg: string) => void) {
     // Standardize URL to end with slash
@@ -206,7 +206,7 @@ export class MerlinClient {
   // Preloaders
   public async preloadGeneralCache() {
     this.log('Preloading general cache (clients, work order types, tags)...');
-    
+
     // Clients
     let res = await this.requestJson('GET', 'clients/');
     if (res.status === 200) {
@@ -349,7 +349,7 @@ export class MerlinClient {
   }
 
   // Create Work Order
-  public async createWorkOrder(row: Record<string, any>): Promise<boolean> {
+  public async createWorkOrder(row: Record<string, any>, recurrenceDays?: number[]): Promise<boolean> {
     const clientName = String(row['Client'] || '').trim();
     if (!clientName) {
       this.log('Skipping row: Client name is missing.');
@@ -453,7 +453,7 @@ export class MerlinClient {
     // Create an ISO string with +05:30 offset
     const kolkataIsoStr = `${year}-${month}-${day}T${hours}:${minutes}:${seconds}+05:30`;
     const finalDate = new Date(kolkataIsoStr);
-    
+
     if (isNaN(finalDate.getTime())) {
       this.log(`Error parsing due date/time combo into date.`);
       return false;
@@ -485,8 +485,25 @@ export class MerlinClient {
       }
     }
 
-    const schedule = String(row['Schedule'] || '').trim().toLowerCase();
-    const isRecurring = schedule === 'daily' || schedule === 'weekly';
+    // Determine recurrence: custom UI days take priority over sheet's Schedule column
+    let isRecurring = false;
+    let recurrenceType = '';
+    let recurrencePrecision: number[] = [];
+
+    if (recurrenceDays && recurrenceDays.length > 0) {
+      // Custom recurrence from UI
+      isRecurring = true;
+      recurrencePrecision = recurrenceDays;
+      recurrenceType = recurrenceDays.length === 7 ? 'daily' : 'weekly';
+    } else if (!recurrenceDays) {
+      // No custom override — fall back to sheet's Schedule column
+      const schedule = String(row['Schedule'] || '').trim().toLowerCase();
+      if (schedule === 'daily' || schedule === 'weekly') {
+        isRecurring = true;
+        recurrenceType = schedule;
+        recurrencePrecision = [1, 2, 3, 4, 5];
+      }
+    }
 
     const checklistReq = String(row['Checklist required for completion'] || '').trim().toUpperCase();
     const isChecklistRequired = ['Y', 'YES', '1', 'TRUE'].includes(checklistReq);
@@ -517,13 +534,8 @@ export class MerlinClient {
     }
 
     if (isRecurring) {
-      if (schedule === 'daily') {
-        payload.recurrence = { interval: 1, precision: [1, 2, 3, 4, 5] };
-        payload.recurrence_type = 'daily';
-      } else if (schedule === 'weekly') {
-        payload.recurrence = { interval: 1, precision: [1, 2, 3, 4, 5] };
-        payload.recurrence_type = 'weekly';
-      }
+      payload.recurrence = { interval: 1, precision: recurrencePrecision };
+      payload.recurrence_type = recurrenceType;
     }
 
     const res = await this.requestJson('POST', 'work-orders/', payload);
@@ -659,7 +671,7 @@ export class MerlinClient {
     if (res.status === 200) {
       const items = res.data?.data?.items || [];
       const expected = locationValue.trim().toLowerCase();
-      
+
       for (const item of items) {
         const candidates = [item.id, item.name, item.code];
         if (candidates.some((c) => String(c || '').trim().toLowerCase() === expected)) {
@@ -905,7 +917,7 @@ export class MerlinClient {
   public async getTicketTagId(tagName: string): Promise<number | null> {
     if (!tagName) return null;
     const cleanTagName = tagName.trim();
-    
+
     // Check cache
     const cacheKey = `ticket_tag_${cleanTagName.toLowerCase()}`;
     if (this.cache.tags[cacheKey]) {

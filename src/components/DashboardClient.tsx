@@ -21,7 +21,9 @@ import {
   Info,
   Clock,
   ShieldAlert,
-  MapPin
+  MapPin,
+  CalendarDays,
+  RefreshCw
 } from 'lucide-react';
 import { MerlinClient, type SiteLocation } from '@/lib/merlin';
 
@@ -45,12 +47,12 @@ const MAX_DELETE_WORKERS = 10;
 
 export default function DashboardClient({ userEmail, onLogout }: { userEmail: string; onLogout: () => void }) {
   const [activeTab, setActiveTab] = useState<'upload' | 'ticket_upload' | 'delete' | 'logs'>('upload');
-  
+
   // App Configs
   const [uploadApiUrl, setUploadApiUrl] = useState('https://api-mneo-cbre.merlin-soteria.in/api/v1/');
   const [uploadUsername, setUploadUsername] = useState('');
   const [uploadPassword, setUploadPassword] = useState('');
-  
+
   const [deleteApiUrl, setDeleteApiUrl] = useState('https://api-merlin.tenonfm-india.com/api/v1/');
   const [deleteUsername, setDeleteUsername] = useState('');
   const [deletePassword, setDeletePassword] = useState('');
@@ -64,11 +66,15 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
   const [ticketPriorityId, setTicketPriorityId] = useState('5eb3ecec-9303-4900-8a83-a081f8f1ef25');
   const [ticketFile, setTicketFile] = useState<File | null>(null);
   const [ticketRows, setTicketRows] = useState<any[]>([]);
-  
+
   // Upload State
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadRows, setUploadRows] = useState<any[]>([]);
-  
+
+  // Recurrence Day Selector State
+  const [applyRecurrence, setApplyRecurrence] = useState(false);
+  const [recurrenceDays, setRecurrenceDays] = useState<number[]>([1, 2, 3, 4, 5]);
+
   // Delete State
   const [deleteFile, setDeleteFile] = useState<File | null>(null);
   const [deleteRows, setDeleteRows] = useState<any[]>([]);
@@ -83,18 +89,18 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
   const [selectedDeleteLocationId, setSelectedDeleteLocationId] = useState('');
   const [locationsClientId, setLocationsClientId] = useState('');
   const [isLoadingLocations, setIsLoadingLocations] = useState(false);
-  
+
   // Process State
   const [isRunning, setIsRunning] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [progress, setProgress] = useState(0);
   const [stats, setStats] = useState({ total: 0, current: 0, success: 0, failed: 0 });
   const [logs, setLogs] = useState<LogLine[]>([]);
-  
+
   // Audit Logs State
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   const consoleBoxRef = useRef<HTMLDivElement>(null);
   const stopRequestedRef = useRef(false);
 
@@ -143,7 +149,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
     const file = e.target.files?.[0];
     if (!file) return;
     setUploadFile(file);
-    
+
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
@@ -166,7 +172,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
     const file = e.target.files?.[0];
     if (!file) return;
     setTicketFile(file);
-    
+
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
@@ -189,7 +195,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
     const file = e.target.files?.[0];
     if (!file) return;
     setDeleteFile(file);
-    
+
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
@@ -347,9 +353,9 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
 
       const row = uploadRows[i];
       addLog(`Processing row ${i + 1}/${uploadRows.length}: "${row.Title || 'Untitled Work Order'}"...`, 'general');
-      
+
       try {
-        const success = await client.createWorkOrder(row);
+        const success = await client.createWorkOrder(row, applyRecurrence ? recurrenceDays : undefined);
         if (success) {
           successCount++;
         } else {
@@ -453,7 +459,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       const subject = normalisedRow['subject'] || normalisedRow['subject '] || 'Auto Ticket';
 
       addLog(`Processing row ${i + 1}/${ticketRows.length}: "${subject}"...`, 'general');
-      
+
       try {
         const success = await client.createTicket(
           row,
@@ -613,7 +619,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
       const selectedLocation = deleteLocations.find((loc) => loc.id === locationId);
       addLog(`Fetching up to ${deleteLimit} work orders for client: ${clientId}${selectedLocation ? ` at location: ${selectedLocation.name}` : ''}...`, 'info');
       const workOrders = await client.fetchWorkOrders(clientId, deleteLimit, deleteOnlyOverdue, locationId || undefined);
-      
+
       if (workOrders.length === 0) {
         addLog('No work orders found matching criteria.', 'warning');
         setIsRunning(false);
@@ -647,7 +653,7 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
         }
 
         const row = deleteRows[i];
-        
+
         // Accepted column mapping (case-insensitive)
         const rowKeys = Object.keys(row);
         const getRowVal = (keys: string[]) => {
@@ -916,6 +922,95 @@ export default function DashboardClient({ userEmail, onLogout }: { userEmail: st
                       onChange={handleUploadFileChange}
                       disabled={isRunning}
                     />
+                  </div>
+
+                  {/* Recurrence Day Selector */}
+                  <div className={`recurrence-panel ${applyRecurrence ? 'active' : ''}`}>
+                    <div className="recurrence-toggle-row">
+                      <div className="recurrence-toggle-label">
+                        <CalendarDays size={16} />
+                        <span>Apply Custom Recurrence</span>
+                      </div>
+                      <label className="switch">
+                        <input
+                          type="checkbox"
+                          checked={applyRecurrence}
+                          onChange={(e) => setApplyRecurrence(e.target.checked)}
+                          disabled={isRunning}
+                        />
+                        <span className="slider"></span>
+                      </label>
+                    </div>
+
+                    {applyRecurrence && (
+                      <div className="recurrence-body">
+                        <div className="day-selector-label">Select Days of the Week</div>
+                        <div className="day-selector-grid">
+                          {[
+                            { label: 'M', value: 1 },
+                            { label: 'T', value: 2 },
+                            { label: 'W', value: 3 },
+                            { label: 'T', value: 4 },
+                            { label: 'F', value: 5 },
+                            { label: 'S', value: 6 },
+                            { label: 'S', value: 7 },
+                          ].map((day) => (
+                            <button
+                              key={day.value}
+                              className={`day-pill ${recurrenceDays.includes(day.value) ? 'selected' : ''}`}
+                              onClick={() => {
+                                setRecurrenceDays((prev) =>
+                                  prev.includes(day.value)
+                                    ? prev.filter((d) => d !== day.value)
+                                    : [...prev, day.value].sort((a, b) => a - b)
+                                );
+                              }}
+                              disabled={isRunning}
+                              title={['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][day.value - 1]}
+                            >
+                              {day.label}
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="quick-select-row">
+                          <button
+                            className="quick-select-btn"
+                            onClick={() => setRecurrenceDays([1, 2, 3, 4, 5])}
+                            disabled={isRunning}
+                          >
+                            Weekdays (M–F)
+                          </button>
+                          <button
+                            className="quick-select-btn"
+                            onClick={() => setRecurrenceDays([1, 2, 3, 4, 5, 6, 7])}
+                            disabled={isRunning}
+                          >
+                            All Days
+                          </button>
+                          <button
+                            className="quick-select-btn"
+                            onClick={() => setRecurrenceDays([])}
+                            disabled={isRunning}
+                          >
+                            Clear
+                          </button>
+                        </div>
+
+                        {recurrenceDays.length > 0 && (
+                          <div className="recurrence-type-display">
+                            <RefreshCw size={12} />
+                            <span>Recurrence type:</span>
+                            <span className="type-badge">
+                              {recurrenceDays.length === 7 ? 'Daily' : 'Weekly'}
+                            </span>
+                            <span>
+                              — {recurrenceDays.map((d) => ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][d - 1]).join(', ')}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div className="action-row">
